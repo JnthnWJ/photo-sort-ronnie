@@ -6,7 +6,7 @@ import threading
 from PySide6.QtCore import QObject, QThread, Signal
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
-    QFileDialog, QRadioButton, QCheckBox, QProgressBar, QTextEdit, QGroupBox
+    QFileDialog, QRadioButton, QCheckBox, QProgressBar, QTextEdit, QGroupBox, QComboBox
 )
 
 from photosorter.ops import Options
@@ -113,11 +113,18 @@ class MainWindow(QWidget):
         self.cb_dryrun.setChecked(True)
         self.cb_filetime = QCheckBox("Fallback to file times when no EXIF/filename date")
         self.cb_filetime.setChecked(True)
+        self.cb_convert_heic = QCheckBox("Convert HEIC to JPEG")
+        self.cb_convert_heic.setChecked(False)
+        self.cb_live = QComboBox()
+        self.cb_live.addItems(["Preserve both", "Image only", "Video only"])
         opt_lay.addWidget(self.rb_copy)
         opt_lay.addWidget(self.rb_move)
         opt_lay.addWidget(self.cb_recursive)
         opt_lay.addWidget(self.cb_dryrun)
         opt_lay.addWidget(self.cb_filetime)
+        opt_lay.addWidget(self.cb_convert_heic)
+        opt_lay.addWidget(QLabel("Live Photos:"))
+        opt_lay.addWidget(self.cb_live)
         opt_box.setLayout(opt_lay)
         lay.addWidget(opt_box)
 
@@ -166,6 +173,8 @@ class MainWindow(QWidget):
                 self._append_log(f"Cannot create destination: {e}")
                 return
         mode = "move" if self.rb_move.isChecked() else "copy"
+        live_map = {0: "preserve_both", 1: "image_only", 2: "video_only"}
+        live_choice = live_map.get(self.cb_live.currentIndex(), "preserve_both")
         opts = Options(
             source=src,
             dest_root=dst,
@@ -174,6 +183,8 @@ class MainWindow(QWidget):
             dry_run=self.cb_dryrun.isChecked(),
             fallback_use_file_times=self.cb_filetime.isChecked(),
             max_workers=8,
+            convert_heic_to_jpeg=self.cb_convert_heic.isChecked(),
+            live_photos=live_choice,
         )
         self._run_worker(opts)
 

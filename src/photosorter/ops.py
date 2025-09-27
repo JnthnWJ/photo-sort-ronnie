@@ -15,6 +15,8 @@ class Options:
     dry_run: bool = True
     fallback_use_file_times: bool = True
     max_workers: int = 8
+    convert_heic_to_jpeg: bool = False
+    live_photos: str = "preserve_both"  # "preserve_both" | "image_only" | "video_only"
 
 
 @dataclass

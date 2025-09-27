@@ -9,6 +9,8 @@ Cross-platform photo sorting tool that organizes images into YYYY/MM folders bas
 - Recursively process nested folders
 - EXIF date preferred; fallback to filename patterns; then filesystem times; else `unknown/`
 - Progress bar and log output
+- Optional HEIC  JPEG conversion (with EXIF and timestamps preserved)
+- Live Photos support: preserve both still and video with paired names, or choose image-only/video-only
 
 ## Requirements
 - Python 3.10+
@@ -35,6 +37,7 @@ set PYTHONPATH=src && python -m app.main
 - HEIC support is enabled by `pillow-heif` which registers an Image opener. If a HEIC fails to read EXIF, the app falls back to filename and then file times.
 - Dry-run is on by default. Uncheck it to actually copy/move files.
 - Destination structure is created under the selected destination root; originals are preserved when using Copy mode (default).
+- Live Photos handling: "Preserve both" (default) places the still and MOV together, naming the MOV to match the still's basename. You can choose "Image only" or "Video only" in Options.
 
 ## Packaging (Windows .exe and macOS .app)
 

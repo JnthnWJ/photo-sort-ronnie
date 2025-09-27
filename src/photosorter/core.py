@@ -123,11 +123,74 @@ def _ensure_dir(p: Path) -> None:
 
 def plan_actions(opts: Options) -> List[Action]:
     actions: List[Action] = []
-    for p in iter_photo_files(opts.source, opts.recursive):
-        dt, reason = extract_photo_date(p, opts.fallback_use_file_times)
+    src_root = opts.source.expanduser().resolve()
+
+    # Determine whether to include videos based on Live Photos mode
+    mode_lp = getattr(opts, "live_photos", "preserve_both")
+    include_videos = mode_lp != "image_only"
+
+    image_exts = {".jpg", ".jpeg", ".png", ".heic"}
+    video_exts = {".mov"}
+
+    # Collect candidate files
+    files: List[Path] = []
+    if opts.recursive:
+        for dirpath, _dirs, names in os.walk(src_root):
+            d = Path(dirpath)
+            for name in names:
+                ext = Path(name).suffix.lower()
+                if ext in image_exts or (include_videos and ext in video_exts):
+                    files.append(d / name)
+    else:
+        for p in src_root.iterdir():
+            if p.is_file():
+                ext = p.suffix.lower()
+                if ext in image_exts or (include_videos and ext in video_exts):
+                    files.append(p)
+
+    # Group by Live Photo pairing key
+    def _pair_key(p: Path) -> str:
+        stem = p.stem
+        # Normalize IMG_E1234 -> IMG_1234 to pair edited stills with their MOV
+        if stem.startswith("IMG_E") and len(stem) > 5 and stem[5:].isdigit():
+            return "IMG_" + stem[5:]
+        return stem
+
+    groups: dict[str, dict[str, Optional[Path]]] = {}
+    for p in files:
+        ext = p.suffix.lower()
+        key = _pair_key(p)
+        g = groups.setdefault(key, {"image": None, "video": None})
+        if ext in image_exts and g["image"] is None:
+            g["image"] = p
+        elif ext in video_exts and g["video"] is None:
+            g["video"] = p
+
+    for key, parts in groups.items():
+        img = parts["image"]
+        vid = parts["video"]
+        include_image = img is not None and mode_lp in ("preserve_both", "image_only")
+        include_video = vid is not None and mode_lp in ("preserve_both", "video_only")
+
+        # Determine date and reason (prefer image when present)
+        date_src = img or vid
+        dt, reason = extract_photo_date(date_src, opts.fallback_use_file_times) if date_src else (None, "unknown")
         dst_dir = _dest_dir_for(opts.dest_root, dt)
-        dst = dst_dir / p.name
-        actions.append(Action(src=p, dst=dst, op=opts.mode, used_date=dt, reason=reason))
+
+        if include_image and img is not None:
+            img_name = img.name
+            if getattr(opts, "convert_heic_to_jpeg", False) and img.suffix.lower() == ".heic":
+                img_name = img.stem + ".jpg"
+            actions.append(Action(src=img, dst=dst_dir / img_name, op=opts.mode, used_date=dt, reason=reason))
+
+        if include_video and vid is not None:
+            # Align video basename with image stem if image exists
+            if img is not None:
+                vid_name = img.stem + vid.suffix.lower()
+            else:
+                vid_name = vid.name
+            actions.append(Action(src=vid, dst=dst_dir / vid_name, op=opts.mode, used_date=dt, reason=reason))
+
     return actions
 
 
@@ -168,10 +231,41 @@ def execute_actions(
                 log(f"{act.op.upper()} {act.src} -> {final_dst} [{act.reason}]")
             if stop_flag and stop_flag.is_set():
                 return act.src, final_dst, False, "cancelled"
-            if act.op == "copy":
-                shutil.copy2(act.src, final_dst)
+            # Handle optional HEIC -> JPEG conversion if destination is JPEG
+            src_ext = act.src.suffix.lower()
+            dst_ext = final_dst.suffix.lower()
+            if src_ext == ".heic" and dst_ext in (".jpg", ".jpeg"):
+                try:
+                    with Image.open(act.src) as img:
+                        exif_bytes = img.info.get("exif")
+                        img.save(final_dst, format="JPEG", quality=95, exif=exif_bytes)
+                    # Preserve timestamps from source
+                    try:
+                        st = act.src.stat()
+                        os.utime(final_dst, (st.st_atime, st.st_mtime))
+                    except Exception:
+                        pass
+                    # If move mode, remove original HEIC after successful conversion
+                    if act.op == "move":
+                        try:
+                            os.remove(act.src)
+                        except Exception:
+                            pass
+                except Exception as e:
+                    # Fallback: copy/move original HEIC to a .heic destination
+                    fb_dst = reg.next_available(final_dst.with_suffix(".heic"))
+                    if log:
+                        log(f"Conversion failed for {act.src}: {e}; falling back to {fb_dst}")
+                    if act.op == "copy":
+                        shutil.copy2(act.src, fb_dst)
+                    else:
+                        shutil.move(str(act.src), str(fb_dst))
+                    return act.src, fb_dst, True, None
             else:
-                shutil.move(str(act.src), str(final_dst))
+                if act.op == "copy":
+                    shutil.copy2(act.src, final_dst)
+                else:
+                    shutil.move(str(act.src), str(final_dst))
             return act.src, final_dst, True, None
         except Exception as e:
             return act.src, act.dst, False, str(e)
